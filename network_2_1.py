@@ -47,6 +47,9 @@ class unet(nn.Module):
         self.dec_multi_elab_6 = MultiScaleElaboration(name = "dec_multi_elab_6")
 
         self.conv = nn.LazyConv3d(out_channels=2, kernel_size=1)        # Two channel then one channel output
+        self.norm = nn.LazyInstanceNorm3d()          # or nn.InstanceNorm3d(2)
+        self.leaky_relu = nn.LeakyReLU(0.3)
+        
         self.final_conv = nn.LazyConv3d(out_channels=1, kernel_size=1)
     
     def forward(self, x):
@@ -93,6 +96,8 @@ class unet(nn.Module):
         dec_multi_elab_6 = self.dec_multi_elab_6(dec_multi_elab_5)
 
         out = self.conv(dec_multi_elab_6)
+        out = self.norm(out)
+        out = self.leaky_relu(out)
         out = self.final_conv(out)
 
         return out
