@@ -168,7 +168,7 @@ with torch.no_grad():
 
         # Normalize per-sample to [0, 1] relative to their own max
         output_norm = output / (output.amax(dim=(2, 3, 4), keepdim=True) + 1e-10)
-        target_norm = target / (target.amax(dim=(2, 3, 4), keepdim=True) + 1e-10)
+        target_norm = target # The normalized data is coming from the datapipeline
 
         pred_np   = output_norm[0, 0].cpu().numpy()
         target_np = target_norm[0, 0].cpu().numpy()
