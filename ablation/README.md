@@ -14,6 +14,9 @@ whichever machine you run on.
 | `train_arm.py` | one arm of the ablation, faithful to the **4 mm** `combined_loss_train_norm.py` that lives on Kalifano, plus checkpoint/resume across jobs |
 | `ablation_4arms.sbatch` | the four arms, one GPU each, on a single node |
 | `test_resume.sbatch` | parity test for the resume, with a control arm |
+| `check_p999_pipeline.py` | what moving the p99.9 anchor into the data pipeline does to the scales |
+| `check_gamma_scale_invariance.py` | shows the training gamma is invariant to a common rescaling |
+| `peak_to_percentile_ratio.py` | why the anchor changes anything: the two fields have different peak-to-percentile ratios |
 
 `train_arm.py` imports `network_2_1.py`, `data_pipeline_128_16_128.py` and
 `losses_opt_1mm.py`. The first and the third are the ones in this repository; the
@@ -93,6 +96,24 @@ against gamma.
 
 A naive resume would therefore have produced a better-looking number that is an artefact
 of the restart. That is why the control arm is in the test.
+
+## Cost, measured on one A100 64 GB
+
+`train_arm.py` takes `--res 4mm` or `--res 2mm`, which sets shape, voxel size, gamma
+criterion, example counts and default batch to match the corresponding training script.
+One full epoch, timed on both:
+
+| | seconds/epoch | peak memory | 150 epochs, one GPU | 24-hour jobs to chain |
+|---|---:|---:|---:|---:|
+| 4 mm, batch 4 | 1,900 | 49.7 GiB | 79 hours | 4 |
+| 2 mm, batch 2 | 3,401 | 53.8 GiB | 142 hours | 6 |
+
+So the 2 mm costs 1.79 times the 4 mm per epoch, and it fits on a single card: scaling the
+measured memory down by batch size puts it near 27 GiB at batch 1.
+
+**`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is not optional at 2 mm.** Without it
+the same job dies out of memory with 62.35 GiB in use of which **12.10 GiB are reserved but
+unallocated** - fragmentation, not demand. With it, the run completes at 53.81 GiB.
 
 ## Reproducing
 

@@ -1,0 +1,2 @@
+epoch,beta,lr,train_loss,val_loss,val_gpr,sec,peak_gib
+0,0.1000,1.00e-05,0.952652,1.495567,93.0866,3401.5,53.81

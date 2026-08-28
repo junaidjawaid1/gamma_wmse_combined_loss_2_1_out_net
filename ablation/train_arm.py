@@ -88,17 +88,21 @@ from data_pipeline_128_16_128 import data_pipeline
 from losses_opt_1mm import (GammaIndexLoss, SimpleBetaScheduler, WeightedMSE,
                             CombinedWMSEGammaLoss)
 
-# --- constants of the 4 mm script (combined_loss_train_norm.py on Kalifano) ---
-DOSE_PERCENT_THRESHOLD = 1.0
-DTA_MM_THRESHOLD = 2.0
+# --- the two resolutions, each faithful to its own training script ---
+# Careful: BOTH scripts are called combined_loss_train_norm.py, one here on GitHub
+# (2 mm) and one on Kalifano (4 mm), and they optimise DIFFERENT gamma criteria.
+# The data pipeline, by contrast, is the same file twice: data_pipeline_128_16_128.py
+# and data_pipeline_256_32_256.py are byte-identical, the shape comes from the .npy.
+RES = {
+    "4mm": dict(voxel=4.0, shape=(128, 16, 128), n_train=1491, n_val=154,
+                dose_pct=1.0, dta_mm=2.0, batch=4),
+    "2mm": dict(voxel=2.0, shape=(256, 32, 256), n_train=787, n_val=77,
+                dose_pct=2.0, dta_mm=2.0, batch=2),
+}
 DOSE_CUTOFF = 0.2
-VOXEL_SIZE_MM = 4.0
-INPUT_SHAPE = (128, 16, 128)
-TRAIN_EXAMPLES = 1491
-VAL_EXAMPLES = 154
 
 
-def build_model(arm, device):
+def build_model(arm, device, INPUT_SHAPE):
     """The repository network, with the two new layers switched off per arm.
 
     Switching them off with nn.Identity, rather than writing four different
@@ -116,23 +120,43 @@ def build_model(arm, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=["A0", "A1", "A2", "A3"])
-    ap.add_argument("--data", required=True, help="root containing train/ and validation/")
+    ap.add_argument("--res", default="4mm", choices=["4mm", "2mm"],
+                    help="resolution. Sets shape, voxel size, gamma criterion, example "
+                         "counts and default batch, each faithful to the training script "
+                         "for that resolution.")
+    ap.add_argument("--data", required=True, help="radice con train/ e validation/")
     ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=60)
-    ap.add_argument("--batch", type=int, default=4)
+    ap.add_argument("--batch", type=int, default=0, help="0 = the default for the chosen resolution")
     ap.add_argument("--seed", type=int, default=20260825)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--target-anchor", default="max", choices=["max", "p999"],
+                    help="scale of the TARGET. 'max' = what the pipeline does today "
+                         "(min-max, maximum 1). 'p999' = the change requested by mail: the "
+                         "target is re-anchored at its own 99.9th percentile, so its maximum "
+                         "rises above 1 (measured: about 3.2x on the 2 mm volumes).")
+    ap.add_argument("--out-anchor", default="max", choices=["max", "p999", "none"],
+                    help="this is line 205. 'max' = as it is today, the prediction is "
+                         "divided by its own maximum. 'none' = drop it, and the network has "
+                         "to learn the absolute scale. 'p999' = move it to the 99.9th "
+                         "percentile, so prediction and target share the anchor.")
     ap.add_argument("--limit-train", type=int, default=0,
-                    help="use only the first N training volumes. FOR RESUME TESTS ONLY: "
-                         "it shortens an epoch from ~1900 s to a few tens of seconds. "
-                         "A real run never uses it.")
+                    help="use only the first N training volumes. FOR TESTS ONLY: it "
+                         "shortens an epoch from ~1900 s to a few tens of seconds. A real "
+                         "run never uses it.")
     ap.add_argument("--limit-val", type=int, default=0, help="same, for validation")
     ap.add_argument("--no-resume", action="store_true",
                     help="ignore last.pth and start from epoch 0 (overwrites the CSV)")
     ap.add_argument("--max-hours", type=float, default=0.0,
-                    help="if >0, stop CLEANLY before this limit instead of being killed by the "
-                         "SLURM wall-clock in the middle of an epoch")
+                    help="if >0, stop CLEANLY before this limit instead of being killed "
+                         "by the batch scheduler in the middle of an epoch")
     args = ap.parse_args()
+    R = RES[args.res]
+    DOSE_PERCENT_THRESHOLD, DTA_MM_THRESHOLD = R["dose_pct"], R["dta_mm"]
+    VOXEL_SIZE_MM, INPUT_SHAPE = R["voxel"], R["shape"]
+    TRAIN_EXAMPLES, VAL_EXAMPLES = R["n_train"], R["n_val"]
+    if args.batch == 0:
+        args.batch = R["batch"]
     t_start = time.perf_counter()
 
     os.makedirs(args.out, exist_ok=True)
@@ -141,13 +165,30 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
 
     dev = "cuda"
-    print("arm %s | torch %s | %s | seed %d" %
-          (args.arm, torch.__version__, torch.cuda.get_device_name(0), args.seed), flush=True)
+
+    def build(arm, device):
+        return build_model(arm, device, INPUT_SHAPE)
+
+    def anchor(t, mode):
+        """Re-anchor a volume (B,1,D,H,W). Returns t unchanged for 'none'.
+        The p99.9 is computed per sample, as the evaluation does."""
+        if mode == "none":
+            return t
+        if mode == "max":
+            return t / (t.amax(dim=(2, 3, 4), keepdim=True) + 1e-10)
+        q = torch.quantile(t.flatten(2).float(), 0.999, dim=2).view(-1, 1, 1, 1, 1)
+        return t / (q + 1e-10)
+
+    print("arm %s | res %s | shape %s | voxel %.1f mm | gamma %.0f%%/%.0fmm | batch %d | "
+          "torch %s | %s | seed %d"
+          % (args.arm, args.res, INPUT_SHAPE, VOXEL_SIZE_MM, DOSE_PERCENT_THRESHOLD,
+             DTA_MM_THRESHOLD, args.batch, torch.__version__,
+             torch.cuda.get_device_name(0), args.seed), flush=True)
 
     n_tr = args.limit_train or TRAIN_EXAMPLES
     n_va = args.limit_val or VAL_EXAMPLES
     if args.limit_train or args.limit_val:
-        print("WARNING: REDUCED RUN (%d/%d train, %d/%d val): this is a test, not a measurement"
+        print("WARNING: REDUCED RUN (%d/%d train, %d/%d val): a test, not a measurement"
               % (n_tr, TRAIN_EXAMPLES, n_va, VAL_EXAMPLES), flush=True)
     train_ds = data_pipeline(path=os.path.join(args.data, "train/"),
                              index_list=[f"{i:03d}" for i in range(1, n_tr + 1)],
@@ -164,7 +205,7 @@ def main():
                         num_workers=args.workers, pin_memory=True, prefetch_factor=4,
                         persistent_workers=True)
 
-    model = build_model(args.arm, dev)
+    model = build(args.arm, dev)
     with torch.no_grad():                                  # initialise the Lazy* layers
         model(x=torch.randn(1, 2, *INPUT_SHAPE, device=dev))
     n_par = sum(p.numel() for p in model.parameters())
@@ -188,9 +229,8 @@ def main():
     start_ep, best = 0, -1.0
     if os.path.exists(last_path) and not args.no_resume:
         # map_location="cpu" and not dev: the generator states are ByteTensors and
-        # `torch.set_rng_state` rejects them if they arrive on CUDA
-        # (TypeError: RNG state must be a torch.ByteTensor). The load_state_dict
-        # calls move things to the parameters' device by themselves.
+        # `torch.set_rng_state` rejects them if they arrive on CUDA. The
+        # load_state_dict calls move things to the parameters' device themselves.
         ck = torch.load(last_path, map_location="cpu", weights_only=False)
         if ck.get("arm") != args.arm or ck.get("seed") != args.seed:
             sys.exit("last.pth belongs to another run (arm=%s seed=%s): not resuming. "
@@ -234,9 +274,11 @@ def main():
         for X, Y in train_dl:
             x = X.to(dev, non_blocking=True); y = Y.to(dev, non_blocking=True)
             opt.zero_grad(set_to_none=True)
+            if args.target_anchor == "p999":
+                y = anchor(y, "p999")
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 out = model(x=x)
-                out = out / (out.amax(dim=(2, 3, 4), keepdim=True) + 1e-10)
+                out = anchor(out, args.out_anchor)      # <- this is line 205
                 loss, _ = criterion(out, y)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             tr_loss += loss.item() * X.size(0); n += X.size(0)
@@ -247,13 +289,17 @@ def main():
         with torch.no_grad():
             for X, Y in val_dl:
                 x = X.to(dev, non_blocking=True); y = Y.to(dev, non_blocking=True)
+                if args.target_anchor == "p999":
+                    y = anchor(y, "p999")
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = model(x=x)
-                    out = out / (out.amax(dim=(2, 3, 4), keepdim=True) + 1e-10)
+                    out = anchor(out, args.out_anchor)
                     loss, _ = criterion(out, y)
                     # GPR is not in the loss dict: it is asked of the criterion,
-                    # and it is the same number used to pick the best model
+                    # and it is the number used to pick the best model
                     gpr = criterion.compute_pass_rate(out, y)
+                if m == 0:      # first batch of the epoch: the scales, for the smoke test
+                    scale_t, scale_p = float(y.amax()), float(out.amax())
                 vl += loss.item() * X.size(0)
                 vg += float(gpr) * X.size(0)
                 m += X.size(0)
@@ -267,8 +313,9 @@ def main():
                                      "%.2e" % opt.param_groups[0]["lr"],
                                      "%.6f" % tr_loss, "%.6f" % vl, "%.4f" % vg,
                                      "%.1f" % dt, "%.2f" % peak])
-        print("ep %3d | beta %.2f | train %.4f | val %.4f | GPR %.2f%% | %.1f s | picco %.1f GiB"
-              % (ep, beta, tr_loss, vl, vg, dt, peak), flush=True)
+        print("ep %3d | beta %.2f | train %.4f | val %.4f | GPR %.2f%% | max(target) %.3f "
+              "max(pred) %.3f | %.1f s | picco %.1f GiB"
+              % (ep, beta, tr_loss, vl, vg, scale_t, scale_p, dt, peak), flush=True)
 
         if vg > best:
             best = vg
@@ -291,8 +338,8 @@ def main():
         os.replace(tmp, last_path)
 
         # Wall-clock guard: if the next epoch does not fit, stop here. An arm
-        # that ends at a declared 43 epochs beats one killed by SLURM halfway
-        # through the 44th, with the CSV truncated at an arbitrary point.
+        # that ends at a declared 43 epochs beats one killed halfway through the
+        # 44th, with the CSV truncated at an arbitrary point.
         if args.max_hours > 0:
             speso = (time.perf_counter() - t_start) / 3600.0
             if speso + (dt / 3600.0) * 1.15 > args.max_hours:
