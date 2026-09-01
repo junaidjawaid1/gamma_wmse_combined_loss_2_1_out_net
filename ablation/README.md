@@ -203,15 +203,26 @@ slightly conservative.
 
 Results: `results/beam_geometry_4mm_test.csv`, `results/beam_geometry_2mm_test.csv`.
 
-**One thing we could not recover from the data: the beam energy of the 4 mm test set.**
-`TOPAS_test.py` samples a fixed 150 MeV and `TOPAS_sim_test_2.py` samples uniform(90, 145);
-we tried three observables - field extent, geometric range from the patient surface, and
-water-equivalent range integrated from the CT - and each was rejected by the same control:
-applied to the validation split, which is generated at a fixed energy, all three give the
-same dispersion as the training split, so none of them sees the energy. The field-extent
-and geometric-range measures are dominated by anatomy, and in a thoracic CT the lung reads
-as air, which truncates any surface-based range. Which of the two scripts produced that
-split is the one question we would still ask.
+**The beam energy of the 4 mm test set, and a control that was wrong.** We first reported
+that the energy could not be recovered from the data. That was mistaken, and the mistake was
+in the control rather than in the measurement. Three observables were tried - field extent,
+geometric range from the patient surface, and water-equivalent range integrated from the CT -
+and each was rejected because, applied to the validation split, it gave the same dispersion as
+the training split. The premise was that validation is generated at a fixed 150 MeV. It is
+not: every split is the same mixture, so a control comparing two identical populations could
+only ever return "indistinguishable".
+
+Read with a common binning, the water-equivalent range does show the energy. Bragg-Kleeman in
+water gives 63.3 mm for 90 MeV and 156.4 mm for 150 MeV; measured, the lower edge sits at
+59-70 mm and the modal class at 155-160 mm in all three splits, with **45.1% of the training
+volumes, 40.7% of validation and 46.2% of test** inside the 152-162 mm window. So the energies
+span roughly 90 to 150 MeV - the lower bound is 90, not the 95 stated in Section 3.1 - and the
+distribution is not uniform but carries a large concentration at 150 MeV. This agrees with what
+the authors describe.
+
+One consequence worth stating because we had raised the opposite: since the training set is
+itself about 45% at 150 MeV, there is **no** sense in which the network is evaluated at an
+energy it never saw.
 
 ## What is running right now
 
