@@ -129,6 +129,10 @@ def main():
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--batch", type=int, default=0, help="0 = the default for the chosen resolution")
     ap.add_argument("--seed", type=int, default=20260825)
+    ap.add_argument("--wmse-alpha", type=float, default=1.0,
+                    help="alpha of the WMSE weight exp(alpha*y_true). 1.0 is the paper. "
+                         "0.0 makes every weight 1, i.e. a plain MSE: that is the "
+                         "controlled comparison Section 3.2 never ran.")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--target-anchor", default="max", choices=["max", "p999"],
                     help="scale of the TARGET. 'max' = what the pipeline does today "
@@ -210,7 +214,7 @@ def main():
         model(x=torch.randn(1, 2, *INPUT_SHAPE, device=dev))
     n_par = sum(p.numel() for p in model.parameters())
 
-    wmse = WeightedMSE(alpha=1.0).to(dev)
+    wmse = WeightedMSE(alpha=args.wmse_alpha).to(dev)
     gamma = GammaIndexLoss(dose_percent=DOSE_PERCENT_THRESHOLD, dta_mm=DTA_MM_THRESHOLD,
                            voxel_size_mm=(VOXEL_SIZE_MM,) * 3, dose_cutoff=DOSE_CUTOFF,
                            beta_init=0.1, max_gamma=10.0).to(dev)
@@ -232,10 +236,11 @@ def main():
         # `torch.set_rng_state` rejects them if they arrive on CUDA. The
         # load_state_dict calls move things to the parameters' device themselves.
         ck = torch.load(last_path, map_location="cpu", weights_only=False)
-        if ck.get("arm") != args.arm or ck.get("seed") != args.seed:
-            sys.exit("last.pth belongs to another run (arm=%s seed=%s): not resuming. "
-                     "Use --no-resume or a different --out."
-                     % (ck.get("arm"), ck.get("seed")))
+        if (ck.get("arm") != args.arm or ck.get("seed") != args.seed
+                or ck.get("wmse_alpha", 1.0) != args.wmse_alpha):
+            sys.exit("last.pth belongs to another run (arm=%s seed=%s wmse_alpha=%s): not "
+                     "resuming. Use --no-resume or a different --out."
+                     % (ck.get("arm"), ck.get("seed"), ck.get("wmse_alpha", 1.0)))
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         lr_sched.load_state_dict(ck["lr_sched"])
@@ -331,6 +336,7 @@ def main():
                     "lr_sched": lr_sched.state_dict(), "scaler": scaler.state_dict(),
                     "criterion": criterion.state_dict(),
                     "epoch": ep, "best": best, "arm": args.arm, "seed": args.seed,
+                    "wmse_alpha": args.wmse_alpha,
                     "rng_torch": torch.get_rng_state(),
                     "rng_numpy": np.random.get_state(),
                     "rng_cuda": torch.cuda.get_rng_state_all(),

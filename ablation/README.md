@@ -17,6 +17,13 @@ whichever machine you run on.
 | `check_p999_pipeline.py` | what moving the p99.9 anchor into the data pipeline does to the scales |
 | `check_gamma_scale_invariance.py` | shows the training gamma is invariant to a common rescaling |
 | `peak_to_percentile_ratio.py` | why the anchor changes anything: the two fields have different peak-to-percentile ratios |
+| `train_150.sbatch`, `submit_chain.sh` | one link of a chained full-length run, and the chain submitter |
+| `eval_anchors.py` | Table 1 under both anchors, refined and baseline rows, paired per volume |
+| `baseline_anchors.py` | the baseline row alone under both anchors - no network, no checkpoint |
+| `check_training_anchor.py` | what moving the p99.9 anchor into **training** actually changes |
+| `check_head_scale.py` | whether the head after `ac70107` can still see the scale of the dose |
+| `beam_geometry.py` | beam angle and field depth of every volume, recovered from the dose field |
+| `gpr_by_angle.py` | joins those angles with the measured pass rates and splits grazing from non-grazing |
 
 `train_arm.py` imports `network_2_1.py`, `data_pipeline_128_16_128.py` and
 `losses_opt_1mm.py`. The first and the third are the ones in this repository; the
@@ -115,6 +122,97 @@ measured memory down by batch size puts it near 27 GiB at batch 1.
 the same job dies out of memory with 62.35 GiB in use of which **12.10 GiB are reserved but
 unallocated** - fragmentation, not demand. With it, the run completes at 53.81 GiB.
 
+## The full-length run, and an independent reproduction
+
+`A0` - the paper's own configuration - was retrained from scratch for the full 150
+epochs on a different machine and a different toolchain, then scored on the same 175
+test volumes as the released checkpoint.
+
+| 4 mm, n = 175 | released checkpoint | retrained A0, 150 epochs |
+|---|---:|---:|
+| refined 2%/2mm | 99.39 +- 1.99 | 99.33 +- 2.18 |
+| refined 1%/1mm | 96.96 +- 6.05 | 96.88 +- 5.87 |
+| refined 2%/2mm, p99.9 anchor | 99.59 +- 0.49 | 99.63 +- 0.50 |
+| refined 1%/1mm, p99.9 anchor | 98.34 +- 1.48 | 98.50 +- 1.48 |
+
+Paired per volume, the retrained model is 0.06-0.07 pp from the released one on the
+published criteria and 0.16 pp above it under the robust anchor. **The method
+reproduces**, which is a stronger statement than re-scoring released weights.
+
+The evaluation carries its own control: the released checkpoint was re-scored on this
+machine and compared with an earlier scoring of the same checkpoint elsewhere. The
+**baseline** columns, which never pass through the network, came out identical to
+0.0000; the **refined** columns differ by at most 0.2721 pp, which is forward-pass
+non-determinism across hardware. A deviation everywhere, or zero everywhere, would each
+have meant something was wrong.
+
+One observation about selection rather than training. The delivered `best.pth` comes
+from **epoch 75**, where beta was 3.38, and its margin over the next best point is
+0.012 pp against an epoch-to-epoch scatter of about 0.2. The beta ramp to 5.0 therefore
+never reaches the model that is used, and picking by the running maximum on a flat curve
+is close to picking at random - two identical runs would deliver checkpoints from
+different epochs. A moving average over k epochs would be steadier.
+
+Results: `results/run150_4mm_A0.csv`, `results/anchors_4mm_UAQ_ckpt.csv`,
+`results/anchors_4mm_A0_150ep.csv`.
+
+## The anchor belongs to the scoring, not to the pipeline
+
+`eval_anchors.py` scores the same predictions twice, changing only the scalar each field
+is divided by. At 4 mm the refined row moves from 99.39 +- 1.99 to 99.59 +- 0.49 at
+2%/2mm and from 96.96 +- 6.05 to 98.34 +- 1.48 at 1%/1mm. What changes is the tail, not
+the mean: volumes below 90% go from 16 to none and the worst volume from 52.40 to 90.19.
+(An
+earlier scoring of the same checkpoint on different hardware put that worst volume at
+52.23; the 0.17 pp difference is the same forward-pass non-determinism quantified just
+above, and is a fair illustration of how much of it there is.)
+The same anchor lifts the **baseline** far more - +8.19 pp at 2%/2mm - which is why it
+has to be applied to both rows, never to the refined row alone.
+
+`baseline_anchors.py` isolates that effect with no network in the loop, and also reports
+the peak-to-p99.9 ratio of each field, which is the mechanism: the maximum of a 5k field
+is a noise spike exceeding the reference peak by 1.14x to 6.12x.
+
+**Moving the same anchor into the data pipeline is a different change, and it does not do
+what it looks like.** `check_training_anchor.py` measures it: the training tolerance is
+recomputed inside the loss from `target.max()` on every call, so rescaling the target in
+the pipeline rescales the tolerance with it and the relative tolerance is unchanged. The
+entire residual effect on the gamma term is a rescaling of the prediction alone, by the
+ratio of the two peak-to-percentile ratios; what genuinely changes is the WMSE weighting
+profile, `exp(alpha*y_true)`, which is a different experiment. The script prints three
+rows and two of them agree to six significant figures.
+
+Related, and easy to miss: `check_head_scale.py` shows that the `InstanceNorm3d` added by
+`ac70107` makes the head blind to absolute scale - multiplying the head's input by five
+moves the output maximum by a factor 1.00009, against 1.44 without it. Under line 205 this
+is invisible, because the output is renormalised to its own maximum anyway. It matters the
+moment the network is asked to emit absolute dose.
+
+## Beam angle, recovered from the data
+
+The `.npy` files carry no beam metadata, so `beam_geometry.py` recovers the angle from the
+dose field itself by dose-weighted PCA in the X-Z plane, and `gpr_by_angle.py` joins it with
+the measured pass rates.
+
+At **4 mm** the test set contains no grazing beams: 0 of 175 volumes below 20 degrees, the
+minimum being 31.0, while training and validation both reach 0. At **2 mm** it does - 33 of
+89 - and there the grazing volumes score **above** the rest, by +0.43 pp at 2%/2mm and
++1.53 pp at 1%/1mm; the three worst volumes sit at 98, 75 and 39 degrees. So the angles
+missing from the 4 mm test set are the easier ones, and the 4 mm figures are if anything
+slightly conservative.
+
+Results: `results/beam_geometry_4mm_test.csv`, `results/beam_geometry_2mm_test.csv`.
+
+**One thing we could not recover from the data: the beam energy of the 4 mm test set.**
+`TOPAS_test.py` samples a fixed 150 MeV and `TOPAS_sim_test_2.py` samples uniform(90, 145);
+we tried three observables - field extent, geometric range from the patient surface, and
+water-equivalent range integrated from the CT - and each was rejected by the same control:
+applied to the validation split, which is generated at a fixed energy, all three give the
+same dispersion as the training split, so none of them sees the energy. The field-extent
+and geometric-range measures are dominated by anatomy, and in a thoracic CT the lung reads
+as air, which truncates any surface-based range. Which of the two scripts produced that
+split is the one question we would still ask.
+
 ## Reproducing
 
     export ROOT=/path/to/workdir DATA=/path/to/4mm/dataset
@@ -122,6 +220,9 @@ unallocated** - fragmentation, not demand. With it, the run completes at 53.81 G
     # plus network_2_1.py, network_elements.py, losses_opt_1mm.py,
     # data_pipeline_128_16_128.py in the same directory
     sbatch ablation/ablation_4arms.sbatch
+
+    # a full-length chained run; ALPHA=0.0 gives a plain MSE, ALPHA=1.0 the published loss
+    ROOT=$ROOT DATA=$DATA RES=4mm ARM=A0 N=8 bash ablation/submit_chain.sh
 
 Environment used, matched to the one that produced the published 4 mm checkpoint:
 Python 3.10, torch 2.7.1+cu118, numpy 1.26.4, pymedphys 0.41.0.
