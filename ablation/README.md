@@ -213,6 +213,41 @@ and geometric-range measures are dominated by anatomy, and in a thoracic CT the 
 as air, which truncates any surface-based range. Which of the two scripts produced that
 split is the one question we would still ask.
 
+## What is running right now
+
+Three jobs are in flight as this is written; their results will be added to `results/`
+when they land. The scripts are all in this directory, so the runs can be inspected or
+repeated before the numbers exist.
+
+**1. WMSE against a plain MSE, at equal training budget.** This is the comparison
+Section 3.2 asserts but never ran under matched conditions. The summary files in the
+tree point the other way - on the network of [6], MSE 95.33 against WMSE 90.09 at
+2%/2mm - but those are runs with different training budgets, so nothing follows from
+them either way. Same network (A0), same seed, same sample order, same 150 epochs; only
+`--wmse-alpha` differs, and `alpha = 0` makes every weight `exp(0) = 1`, i.e. exactly a
+plain MSE, without touching a line of the loss. The WMSE arm did not have to be paid
+for: it is the full-length A0 run already reported above.
+
+    ROOT=$ROOT DATA=$DATA RES=4mm ARM=A0 N=8 ALPHA=0.0 \
+      OUT=$ROOT/run150_4mm_A0_mse bash ablation/submit_chain.sh
+
+What will be concluded, and only this: which loss reaches the higher validation GPR **at
+the same epoch**, judged on the regime (mean of the last 20 epochs, not the single
+maximum - the maximum of a noisy curve is a maximum of noise). If the difference sits
+inside the epoch-to-epoch scatter of one arm, the conclusion is "indistinguishable", not
+"equal" and not "the WMSE does nothing". One seed per arm, so the defensible statement is
+about this run. Nothing from it belongs in Table 1: the validation GPR is computed inside
+the loop, at the training criterion, on the validation split.
+
+**2. The 2 mm A0 run to 150 epochs**, which will give the 2 mm row regenerated from an
+independent training, as was done at 4 mm.
+
+**3. The 2 mm baseline under both anchors** (`baseline_anchors.py`, no network involved).
+This is the measurement that decides how much of the 12.54% baseline in Table 2 is noise
+and how much is normalisation. Until it finishes, the honest statement is that the
+mechanism is measured - the 5k field's maximum overshoots the reference peak by 1.14x to
+6.12x - and its size at 2 mm is not.
+
 ## Reproducing
 
     export ROOT=/path/to/workdir DATA=/path/to/4mm/dataset

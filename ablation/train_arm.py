@@ -124,7 +124,7 @@ def main():
                     help="resolution. Sets shape, voxel size, gamma criterion, example "
                          "counts and default batch, each faithful to the training script "
                          "for that resolution.")
-    ap.add_argument("--data", required=True, help="radice con train/ e validation/")
+    ap.add_argument("--data", required=True, help="root holding train/ and validation/")
     ap.add_argument("--out", required=True)
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--batch", type=int, default=0, help="0 = the default for the chosen resolution")
