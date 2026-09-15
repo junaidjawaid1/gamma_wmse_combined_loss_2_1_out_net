@@ -15,9 +15,5 @@ export NUMEXPR_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 GRB_VER=1001
 
-if [ -f /NFSHOME/swdisim/.mygurobi$GRB_VER ]; then
-    . /NFSHOME/swdisim/.mygurobi$GRB_VER
-    echo "Gurobi Ver. $GRB_VER"
-fi
 
 srun python "$@"
