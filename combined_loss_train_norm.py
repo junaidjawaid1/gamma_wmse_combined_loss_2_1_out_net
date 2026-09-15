@@ -32,9 +32,9 @@ train_batch_size = 2
 validation_batch_size = 2
 epochs = 150
 
-train_path = '/NFSHOME/mspezialetti/sharedFolder/MC_CT_dataset_2mm_voxel/dataset/train/'
-validation_path = '/NFSHOME/mspezialetti/sharedFolder/MC_CT_dataset_2mm_voxel/dataset/validation/'
-test_path = '/NFSHOME/mspezialetti/sharedFolder/MC_CT_dataset_2mm_voxel/dataset/test/'
+train_path = '/.../dataset/train/'
+validation_path = '/.../dataset/validation/'
+test_path = '/.../dataset/test/'
 
 timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 log_csv = f"/NFSHOME/mspezialetti/sharedFolder/MC_CT_dataset_2mm_voxel/models_and_outputs/{timestamp}_combined_wmse_gamma_train_2_1_out_{input_shape_str}_zero_outside_more_data_2mm_1%.csv"
