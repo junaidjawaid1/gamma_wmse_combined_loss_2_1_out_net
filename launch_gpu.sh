@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -s
 #SBATCH -n 1
-#SBATCH -o /NFSHOME/mspezialetti/sharedFolder/MC_CT_dataset_2mm_voxel/out/gamma_eval_1mm_1prc.out
+#SBATCH -o /.../out/gamma_eval_1mm_1prc.out
 #SBATCH -J gamma_eval_1mm_1prc
 #SBATCH -p cuda
 #SBATCH -c 16
